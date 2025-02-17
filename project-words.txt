@@ -449,6 +449,7 @@ KEYID
 QUERYPARAM
 streamingkeydelivery
 TARGETDURATION
+SQUEEZECURRENT
 
 # other
 autoglottonym
