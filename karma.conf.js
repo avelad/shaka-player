@@ -253,6 +253,7 @@ module.exports = (config) => {
       {pattern: 'third_party/**/*.js', included: false},
       {pattern: 'test/**/*.js', included: false},
       {pattern: 'test/test/assets/*', included: false},
+      {pattern: 'test/test/assets/clear-encrypted/*', included: false},
       {pattern: 'test/test/assets/dash-multi-codec/*', included: false},
       {pattern: 'test/test/assets/dash-multi-codec-ec3/*', included: false},
       {pattern: 'test/test/assets/3675/*', included: false},
@@ -365,6 +366,11 @@ module.exports = (config) => {
 
         // Overrides the default test timeout value.
         testTimeout: settings.test_timeout,
+
+        // Without this flag, we don't trust Safari to run native layout tests.
+        // Rendering on these is super inconsistent from device to device, so
+        // this flag is used in our lab environment explicitly.
+        trustSafariNativeTextLayout: settings.trust_safari_native_text_layout,
       }],
     },
 

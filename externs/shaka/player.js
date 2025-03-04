@@ -2545,14 +2545,17 @@ shaka.extern.TextDisplayerConfiguration;
  *   Defaults to <code>''</code>.
  * @property {!Array<string>} preferredVideoCodecs
  *   The list of preferred video codecs, in order of highest to lowest priority.
+ *   This is used to do a filtering of the variants available for the player.
  *   <br>
  *   Defaults to <code>[]</code>.
  * @property {!Array<string>} preferredAudioCodecs
  *   The list of preferred audio codecs, in order of highest to lowest priority.
+ *   This is used to do a filtering of the variants available for the player.
  *   <br>
  *   Defaults to <code>[]</code>.
  * @property {!Array<string>} preferredTextFormats
  *   The list of preferred text formats, in order of highest to lowest priority.
+ *   This is used to do a filtering of the text tracks available for the player.
  *   <br>
  *   Defaults to <code>[]</code>.
  * @property {number} preferredAudioChannelCount
@@ -2578,6 +2581,7 @@ shaka.extern.TextDisplayerConfiguration;
  * @property {!Array<string>} preferredDecodingAttributes
  *   The list of preferred attributes of decodingInfo, in the order of their
  *   priorities.
+ *   This is used to do a filtering of the variants available for the player.
  *   <br>
  *   Defaults to <code>[]</code>.
  * @property {boolean} preferForcedSubs
@@ -2647,7 +2651,9 @@ shaka.extern.LanguageRole;
  *   duration: number,
  *   uris: !Array<string>,
  *   width: number,
- *   sprite: boolean
+ *   sprite: boolean,
+ *   mimeType: ?string,
+ *   codecs: ?string
  * }}
  *
  * @property {shaka.media.SegmentReference} segment
@@ -2675,6 +2681,10 @@ shaka.extern.LanguageRole;
  *    The thumbnail width in px.
  * @property {boolean} sprite
  *    Indicate if the thumbnail is a sprite.
+ * @property {?string} mimeType
+ *   The thumbnail MIME type, if present.
+ * @property {?string} codecs
+ *   The thumbnail codecs, if present.
  * @exportDoc
  */
 shaka.extern.Thumbnail;

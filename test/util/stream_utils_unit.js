@@ -803,6 +803,21 @@ describe('StreamUtils', () => {
       });
     };
 
+    const addVariant1080HEVC = (manifest) => {
+      manifest.addVariant(9, (variant) => {
+        variant.bandwidth = 4811000;
+        variant.addAudio(1, (stream) => {
+          stream.bandwidth = 129998;
+          stream.mime('audio/mp4', 'mp4a.40.2');
+        });
+        variant.addVideo(10, (stream) => {
+          stream.bandwidth = 4681002;
+          stream.size(1920, 1080);
+          stream.mime('video/mp4', 'hvc1.1.6.L93.90');
+        });
+      });
+    };
+
     const addTextStreamVTT = (manifest) => {
       manifest.addTextStream(0, (stream) => {
         stream.mimeType = 'text/vtt';
@@ -849,6 +864,38 @@ describe('StreamUtils', () => {
       expect(manifest.variants.length).toBe(3);
       expect(manifest.variants.every((v) => [300000, 400000, 500000].includes(
           v.video.bandwidth))).toBeTruthy();
+    });
+
+    it('should keep variants where the lower resolution bandwidth' +
+      ' is greater than the higher resolution bandwidth', () => {
+      manifest = shaka.test.ManifestGenerator.generate((manifest) => {
+        manifest.addVariant(0, (variant) => {
+          variant.addVideo(1, (stream) => {
+            stream.bandwidth = 4000000;
+            stream.size(1920, 1080);
+          });
+        });
+        manifest.addVariant(1, (variant) => {
+          variant.addVideo(2, (stream) => {
+            stream.bandwidth = 5000000;
+            stream.size(1280, 720);
+          });
+        });
+        manifest.addVariant(2, (variant) => {
+          variant.addVideo(3, (stream) => {
+            stream.bandwidth = 3000000;
+            stream.size(640, 360);
+          });
+        });
+      });
+
+      shaka.util.StreamUtils.chooseCodecsAndFilterManifest(manifest,
+          /* preferredVideoCodecs= */[],
+          /* preferredAudioCodecs= */[],
+          /* preferredDecodingAttributes= */[],
+          /* preferredTextFormats= */ []);
+
+      expect(manifest.variants.length).toBe(3);
     });
 
     it('should filter variants by the best available bandwidth' +
@@ -908,6 +955,9 @@ describe('StreamUtils', () => {
       if (!await Util.isTypeSupported('audio/webm; codecs="vorbis"')) {
         pending('Codec vorbis is not supported by the platform.');
       }
+      if (!await Util.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.90"')) {
+        pending('Codec HEVC is not supported by the platform.');
+      }
       // This test is flaky in some Tizen devices, due to codec restrictions.
       if (shaka.util.Platform.isTizen()) {
         pending('Skip flaky test in Tizen');
@@ -916,6 +966,7 @@ describe('StreamUtils', () => {
         addVariant720Avc1(manifest);
         addVariant720Vp9(manifest);
         addVariant1080Vp9(manifest);
+        addVariant1080HEVC(manifest);
       });
 
       manifest.variants[0].video.bandwidth = 1;

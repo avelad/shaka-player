@@ -42,6 +42,35 @@ shaka.ui.Overlay = class {
     /** @private {!shaka.extern.UIConfiguration} */
     this.config_ = this.defaultConfig_();
 
+    // Get and configure cast app id.
+    let castAppId = '';
+
+    // Get and configure cast Android Receiver Compatibility
+    let castAndroidReceiverCompatible = false;
+
+    // Cast receiver id can be specified on either container or video.
+    // It should not be provided on both. If it was, we will use the last
+    // one we saw.
+    if (videoContainer['dataset'] &&
+        videoContainer['dataset']['shakaPlayerCastReceiverId']) {
+      const dataSet = videoContainer['dataset'];
+      castAppId = dataSet['shakaPlayerCastReceiverId'];
+      castAndroidReceiverCompatible =
+          dataSet['shakaPlayerCastAndroidReceiverCompatible'] === 'true';
+    } else if (video['dataset'] &&
+               video['dataset']['shakaPlayerCastReceiverId']) {
+      const dataSet = video['dataset'];
+      castAppId = dataSet['shakaPlayerCastReceiverId'];
+      castAndroidReceiverCompatible =
+          dataSet['shakaPlayerCastAndroidReceiverCompatible'] === 'true';
+    }
+
+    if (castAppId.length) {
+      this.config_.castReceiverAppId = castAppId;
+      this.config_.castAndroidReceiverCompatible =
+          castAndroidReceiverCompatible;
+    }
+
     // Make sure this container is discoverable and that the UI can be reached
     // through it.
     videoContainer['dataset']['shakaPlayerContainer'] = '';
@@ -55,10 +84,6 @@ shaka.ui.Overlay = class {
     /** @private {shaka.ui.Controls} */
     this.controls_ = new shaka.ui.Controls(
         player, videoContainer, video, vrCanvas, this.config_);
-
-    // Run the initial setup so that no configure() call is required for default
-    // settings.
-    this.configure({});
 
     // If the browser's native controls are disabled, use UI TextDisplayer.
     if (!video.controls) {
@@ -137,17 +162,28 @@ shaka.ui.Overlay = class {
 
     goog.asserts.assert(typeof(config) == 'object', 'Should be an object!');
 
+    const newConfig = /** @type {!shaka.extern.UIConfiguration} */(
+      Object.assign({}, this.config_));
     shaka.util.ConfigUtils.mergeConfigObjects(
-        this.config_, config, this.defaultConfig_(),
+        newConfig, config, this.defaultConfig_(),
         /* overrides= */ {}, /* path= */ '');
 
     // If a cast receiver app id has been given, add a cast button to the UI
-    if (this.config_.castReceiverAppId &&
-        !this.config_.overflowMenuButtons.includes('cast')) {
-      this.config_.overflowMenuButtons.push('cast');
+    if (newConfig.castReceiverAppId &&
+        !newConfig.overflowMenuButtons.includes('cast')) {
+      newConfig.overflowMenuButtons.push('cast');
     }
 
     goog.asserts.assert(this.player_ != null, 'Should have a player!');
+
+    const diff = shaka.util.ConfigUtils.getDifferenceFromConfigObjects(
+        newConfig, this.config_);
+    if (!Object.keys(diff).length) {
+      // No changes
+      return;
+    }
+
+    this.config_ = newConfig;
 
     this.controls_.configure(this.config_);
 
@@ -479,33 +515,6 @@ shaka.ui.Overlay = class {
 
     // Attach Canvas used for LCEVC Decoding
     player.attachCanvas(/** @type {HTMLCanvasElement} */(lcevcCanvas));
-
-    // Get and configure cast app id.
-    let castAppId = '';
-
-    // Get and configure cast Android Receiver Compatibility
-    let castAndroidReceiverCompatible = false;
-
-    // Cast receiver id can be specified on either container or video.
-    // It should not be provided on both. If it was, we will use the last
-    // one we saw.
-    if (container['dataset'] &&
-        container['dataset']['shakaPlayerCastReceiverId']) {
-      castAppId = container['dataset']['shakaPlayerCastReceiverId'];
-      castAndroidReceiverCompatible =
-          container['dataset']['shakaPlayerCastAndroidReceiverCompatible'] ===
-          'true';
-    } else if (video['dataset'] &&
-               video['dataset']['shakaPlayerCastReceiverId']) {
-      castAppId = video['dataset']['shakaPlayerCastReceiverId'];
-      castAndroidReceiverCompatible =
-        video['dataset']['shakaPlayerCastAndroidReceiverCompatible'] === 'true';
-    }
-
-    if (castAppId.length) {
-      ui.configure({castReceiverAppId: castAppId,
-        castAndroidReceiverCompatible: castAndroidReceiverCompatible});
-    }
 
     if (shaka.util.Dom.asHTMLMediaElement(video).controls) {
       ui.getControls().setEnabledNativeControls(true);
