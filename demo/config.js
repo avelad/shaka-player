@@ -352,6 +352,9 @@ shakaDemo.Config = class {
     this.addSection_('Text displayer', docLink)
         .addNumberInput_('Captions update period',
             'textDisplayer.captionsUpdatePeriod',
+            /* canBeDecimal= */ true)
+        .addNumberInput_('Font scale factor',
+            'textDisplayer.fontScaleFactor',
             /* canBeDecimal= */ true);
   }
 
@@ -405,7 +408,9 @@ shakaDemo.Config = class {
         .addBoolInput_('Ignore HLS Interstitial',
             'ads.disableHLSInterstitial')
         .addBoolInput_('Ignore DASH Interstitial',
-            'ads.disableDASHInterstitial');
+            'ads.disableDASHInterstitial')
+        .addBoolInput_('Allow preload on DOM elements',
+            'ads.allowPreloadOnDomElements');
   }
 
   /**
