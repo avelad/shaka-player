@@ -75,6 +75,20 @@ describe('InterstitialAdSession', () => {
     expect(onTracking).toHaveBeenCalledWith('zero');
   });
 
+  it('uses the ad duration for fractional VAST progress events', () => {
+    session.setTracker(new shaka.ads.InterstitialTracker(() => [
+      {type: 'progress', fraction: 0.5, urls: ['half']},
+    ], shaka.test.Util.spyFunc(onTracking)));
+
+    session.update();
+    video.currentTime = 109;
+    session.update();
+    expect(onTracking).not.toHaveBeenCalledWith('half');
+    video.currentTime = 110;
+    session.update();
+    expect(onTracking).toHaveBeenCalledWith('half');
+  });
+
   it('does not backfill progress, quartiles or complete after a seek', () => {
     session.update();
     video.on['seeking']();

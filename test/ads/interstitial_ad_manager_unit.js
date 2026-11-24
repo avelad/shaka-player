@@ -2879,6 +2879,80 @@ describe('Interstitial Ad manager', () => {
   });
 
   describe('VAST', () => {
+    const wrappedAd = '<VAST><Ad><Wrapper><VASTAdTagURI>next</VASTAdTagURI>' +
+        '<Error>error?code=[ERRORCODE]</Error></Wrapper></Ad></VAST>';
+
+    it('uses ADS requests and registers both creatives of a wrapped ad',
+        async () => {
+          const inline = [
+            '<VAST><Ad id="shared"><InLine><Creatives><Creative><Linear>',
+            '<MediaFiles><MediaFile type="video/mp4">clip.mp4</MediaFile>',
+            '</MediaFiles></Linear></Creative><Creative><NonLinearAds>',
+            '<NonLinear width="300" height="50">',
+            '<IFrameResource>https://example.com/overlay</IFrameResource>',
+            '</NonLinear></NonLinearAds></Creative></Creatives>',
+            '</InLine></Ad></VAST>',
+          ].join('');
+          networkingEngine.setResponseText('http://ads.test/vast', wrappedAd)
+              .setResponseText('http://ads.test/next', inline);
+
+          await interstitialAdManager.addAdUrlInterstitial('http://ads.test/vast');
+
+          const NetworkingEngine = shaka.net.NetworkingEngine;
+          const context = {
+            type: NetworkingEngine.AdvancedRequestType.INTERSTITIAL_AD_URL,
+          };
+          networkingEngine.expectRequest('http://ads.test/next',
+              NetworkingEngine.RequestType.ADS, context);
+          const ads = interstitialAdManager.getInterstitials();
+          expect(ads.map((ad) => ad.id)).toEqual(['shared', 'shared']);
+          expect(ads.map((ad) => ad.uri)).toEqual([
+            'http://ads.test/clip.mp4', 'https://example.com/overlay',
+          ]);
+        });
+
+    it('reports wrapper errors only while tracking is enabled', async () => {
+      networkingEngine.setResponseText('http://ads.test/vast', wrappedAd)
+          .setResponseText('http://ads.test/next', '<VAST/>');
+      const NetworkingEngine = shaka.net.NetworkingEngine;
+      const context = {
+        type: NetworkingEngine.AdvancedRequestType.TRACKING_EVENT,
+      };
+
+      await interstitialAdManager.addAdUrlInterstitial('http://ads.test/vast');
+      networkingEngine.expectRequest('http://ads.test/error?code=303',
+          NetworkingEngine.RequestType.ADS, context);
+
+      networkingEngine.request.calls.reset();
+      const config = shaka.util.PlayerConfiguration.createDefault().ads;
+      config.disableTrackingEvents = true;
+      interstitialAdManager.configure(config);
+      await interstitialAdManager.addAdUrlInterstitial('http://ads.test/vast');
+      networkingEngine.expectNoRequest('http://ads.test/error?code=303',
+          NetworkingEngine.RequestType.ADS, context);
+    });
+
+    it('aborts a wrapper request when the manager stops', async () => {
+      const requested = Promise.withResolvers();
+      const pending = Promise.withResolvers();
+      networkingEngine.setResponseText('http://ads.test/vast', wrappedAd)
+          .setResponse('http://ads.test/next', (aborted) => {
+            requested.resolve(aborted);
+            return pending.promise;
+          });
+
+      const loading = interstitialAdManager.addAdUrlInterstitial('http://ads.test/vast');
+      const aborted = await requested.promise;
+      interstitialAdManager.stop();
+      expect(aborted()).toBe(true);
+      pending.resolve(shaka.util.StringUtils.toUTF8('<VAST/>'));
+      await loading;
+
+      expect(interstitialAdManager.getInterstitials()).toEqual([]);
+      networkingEngine.expectNoRequest('http://ads.test/error?code=301',
+          shaka.net.NetworkingEngine.RequestType.ADS);
+    });
+
     it('basic interstitial support', async () => {
       const vast = [
         '<?xml version="1.0" encoding="UTF-8"?>',
@@ -2926,9 +3000,9 @@ describe('Interstitial Ad manager', () => {
         '</VAST>',
       ].join('');
 
-      networkingEngine.setResponseText('test:/vast', vast);
+      networkingEngine.setResponseText('http://ads.test/vast', vast);
 
-      await interstitialAdManager.addAdUrlInterstitial('test:/vast');
+      await interstitialAdManager.addAdUrlInterstitial('http://ads.test/vast');
 
       expect(onEventSpy).toHaveBeenCalledTimes(2);
       const eventValuePreload = {
@@ -2956,7 +3030,7 @@ describe('Interstitial Ad manager', () => {
         groupId: null,
         startTime: 0,
         endTime: null,
-        uri: 'test.mp4',
+        uri: 'http://ads.test/test.mp4',
         mimeType: 'video/mp4',
         isSkippable: false,
         skipOffset: null,
@@ -2973,21 +3047,21 @@ describe('Interstitial Ad manager', () => {
         displayOnBackground: false,
         currentVideo: null,
         background: null,
-        clickThroughUrl: 'foo.bar',
+        clickThroughUrl: 'http://ads.test/foo.bar',
         tracking: {
-          impression: ['impression_url', 'impression_url2'],
-          clickTracking: ['click_tracking'],
-          start: ['start_url', 'start_url2'],
-          firstQuartile: ['firstQuartile_url'],
-          midpoint: ['midpoint_url'],
-          thirdQuartile: ['thirdQuartile_url'],
-          complete: ['complete_url'],
-          skip: ['skip_url'],
-          error: ['error_url', 'error_url2'],
-          resume: ['resume_url'],
-          pause: ['pause_url'],
-          mute: ['mute_url'],
-          unmute: ['unmute_url'],
+          impression: ['http://ads.test/impression_url', 'http://ads.test/impression_url2'],
+          clickTracking: ['http://ads.test/click_tracking'],
+          start: ['http://ads.test/start_url', 'http://ads.test/start_url2'],
+          firstQuartile: ['http://ads.test/firstQuartile_url'],
+          midpoint: ['http://ads.test/midpoint_url'],
+          thirdQuartile: ['http://ads.test/thirdQuartile_url'],
+          complete: ['http://ads.test/complete_url'],
+          skip: ['http://ads.test/skip_url'],
+          error: ['http://ads.test/error_url', 'http://ads.test/error_url2'],
+          resume: ['http://ads.test/resume_url'],
+          pause: ['http://ads.test/pause_url'],
+          mute: ['http://ads.test/mute_url'],
+          unmute: ['http://ads.test/unmute_url'],
         },
       };
       expect(interstitials[0]).toEqual(expectedInterstitial);
@@ -3033,9 +3107,9 @@ describe('Interstitial Ad manager', () => {
         '</VAST>',
       ].join('');
 
-      networkingEngine.setResponseText('test:/vast', vast);
+      networkingEngine.setResponseText('http://ads.test/vast', vast);
 
-      await interstitialAdManager.addAdUrlInterstitial('test:/vast');
+      await interstitialAdManager.addAdUrlInterstitial('http://ads.test/vast');
 
       expect(onEventSpy).not.toHaveBeenCalled();
 
@@ -3047,7 +3121,7 @@ describe('Interstitial Ad manager', () => {
         groupId: null,
         startTime: 0,
         endTime: null,
-        uri: 'test.png',
+        uri: 'http://ads.test/test.png',
         mimeType: 'image/png',
         isSkippable: false,
         skipOffset: null,
@@ -3077,21 +3151,21 @@ describe('Interstitial Ad manager', () => {
         displayOnBackground: false,
         currentVideo: null,
         background: null,
-        clickThroughUrl: 'foo.bar',
+        clickThroughUrl: 'http://ads.test/foo.bar',
         tracking: {
-          impression: ['impression_url'],
-          clickTracking: ['click_tracking'],
-          start: ['start_url'],
-          firstQuartile: ['firstQuartile_url'],
-          midpoint: ['midpoint_url'],
-          thirdQuartile: ['thirdQuartile_url'],
-          complete: ['complete_url'],
-          skip: ['skip_url'],
-          error: ['error_url'],
-          resume: ['resume_url'],
-          pause: ['pause_url'],
-          mute: ['mute_url'],
-          unmute: ['unmute_url'],
+          impression: ['http://ads.test/impression_url'],
+          clickTracking: ['http://ads.test/click_tracking'],
+          start: ['http://ads.test/start_url'],
+          firstQuartile: ['http://ads.test/firstQuartile_url'],
+          midpoint: ['http://ads.test/midpoint_url'],
+          thirdQuartile: ['http://ads.test/thirdQuartile_url'],
+          complete: ['http://ads.test/complete_url'],
+          skip: ['http://ads.test/skip_url'],
+          error: ['http://ads.test/error_url'],
+          resume: ['http://ads.test/resume_url'],
+          pause: ['http://ads.test/pause_url'],
+          mute: ['http://ads.test/mute_url'],
+          unmute: ['http://ads.test/unmute_url'],
         },
       };
       expect(interstitials[0]).toEqual(expectedInterstitial);
@@ -3104,9 +3178,9 @@ describe('Interstitial Ad manager', () => {
         '</VAST>',
       ].join('');
 
-      networkingEngine.setResponseText('test:/vast', vast);
+      networkingEngine.setResponseText('http://ads.test/vast', vast);
 
-      await interstitialAdManager.addAdUrlInterstitial('test:/vast');
+      await interstitialAdManager.addAdUrlInterstitial('http://ads.test/vast');
 
       expect(onEventSpy).not.toHaveBeenCalled();
     });
@@ -3122,7 +3196,7 @@ describe('Interstitial Ad manager', () => {
         ' breakId="midroll-1">',
         '<vmap:AdSource id="preroll-ad-1" allowMultipleAds="false"',
         ' followRedirects="true">',
-        '<vmap:AdTagURI templateType="vast3"><![CDATA[test:/vast]]>',
+        '<vmap:AdTagURI templateType="vast3"><![CDATA[http://ads.test/vast]]>',
         '</vmap:AdTagURI>',
         '</vmap:AdSource>',
         '</vmap:AdBreak>',
@@ -3130,7 +3204,7 @@ describe('Interstitial Ad manager', () => {
         ' breakId="midroll-1">',
         '<vmap:AdSource id="midroll-1-ad-1" allowMultipleAds="false"',
         ' followRedirects="true">',
-        '<vmap:AdTagURI templateType="vast3"><![CDATA[test:/vast]]>',
+        '<vmap:AdTagURI templateType="vast3"><![CDATA[http://ads.test/vast]]>',
         '</vmap:AdTagURI>',
         '</vmap:AdSource>',
         '</vmap:AdBreak>',
@@ -3138,7 +3212,7 @@ describe('Interstitial Ad manager', () => {
         ' breakId="midroll-1">',
         '<vmap:AdSource id="postroll-ad-1" allowMultipleAds="false"',
         ' followRedirects="true">',
-        '<vmap:AdTagURI templateType="vast3"><![CDATA[test:/vast]]>',
+        '<vmap:AdTagURI templateType="vast3"><![CDATA[http://ads.test/vast]]>',
         '</vmap:AdTagURI>',
         '</vmap:AdSource>',
         '</vmap:AdBreak>',
@@ -3169,10 +3243,10 @@ describe('Interstitial Ad manager', () => {
       ].join('');
 
       networkingEngine
-          .setResponseText('test:/vmap', vmap)
-          .setResponseText('test:/vast', vast);
+          .setResponseText('http://ads.test/vmap', vmap)
+          .setResponseText('http://ads.test/vast', vast);
 
-      await interstitialAdManager.addAdUrlInterstitial('test:/vmap');
+      await interstitialAdManager.addAdUrlInterstitial('http://ads.test/vmap');
 
       expect(onEventSpy).toHaveBeenCalledTimes(2);
       const eventValuePreload = {
@@ -3209,9 +3283,9 @@ describe('Interstitial Ad manager', () => {
         '</vmap:VMAP>',
       ].join('');
 
-      networkingEngine.setResponseText('test:/vmap', vmap);
+      networkingEngine.setResponseText('http://ads.test/vmap', vmap);
 
-      await interstitialAdManager.addAdUrlInterstitial('test:/vmap');
+      await interstitialAdManager.addAdUrlInterstitial('http://ads.test/vmap');
 
       expect(onEventSpy).not.toHaveBeenCalled();
     });

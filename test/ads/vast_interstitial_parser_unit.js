@@ -7,6 +7,7 @@
 describe('VastInterstitialParser', () => {
   const TXml = shaka.util.TXml;
   const VastInterstitialParser = shaka.ads.VastInterstitialParser;
+  const parser = new VastInterstitialParser();
 
   const linearVast = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -64,9 +65,278 @@ describe('VastInterstitialParser', () => {
     return node;
   }
 
+  describe('load', () => {
+    /** @type {!Array<string>} */
+    let requests;
+    /** @type {!Array<string>} */
+    let beacons;
+    /** @type {!shaka.ads.VastInterstitialParser} */
+    let loader;
+    /** @type {!Map<string, {xml: string, uri: (string|undefined)}>} */
+    let documents;
+
+    beforeEach(() => {
+      documents = new Map();
+      requests = [];
+      beacons = [];
+      loader = new VastInterstitialParser((uri) => {
+        requests.push(uri);
+        const entry = documents.get(uri);
+        if (!entry) {
+          return Promise.reject(new Error('Ad tag is unavailable'));
+        }
+        const NetworkingEngine = shaka.net.NetworkingEngine;
+        /** @type {shaka.extern.Response} */
+        const response = {
+          uri: entry.uri || uri,
+          originalUri: uri,
+          data: shaka.util.StringUtils.toUTF8(entry.xml),
+          headers: {},
+          originalRequest: NetworkingEngine.makeRequest(
+              [uri], NetworkingEngine.defaultRetryParameters()),
+        };
+        return Promise.resolve(response);
+      }, (uri) => { beacons.push(uri); });
+    });
+
+    const wrapper = (tag, attributes = '', contents = '', ad = '') =>
+      `<Ad ${ad}><Wrapper ${attributes}><VASTAdTagURI>${tag}</VASTAdTagURI>` +
+      contents + '</Wrapper></Ad>';
+    const document = (...ads) => `<VAST>${ads.join('')}</VAST>`;
+    const inline = (id, sequence = '') =>
+      `<Ad id="${id}" ${sequence}><InLine><Creatives><Creative><Linear>` +
+      '<MediaFiles><MediaFile type="video/mp4">ad.mp4</MediaFile>' +
+      '</MediaFiles>' +
+      '</Linear></Creative></Creatives></InLine></Ad>';
+
+    it('reads the playback time after the initial VAST arrives', async () => {
+      documents.set('http://ads.test/root', {xml: document(wrapper('next'))});
+      documents.set('http://ads.test/next', {xml: document(inline('ad'))});
+      let currentTime = null;
+      const loading = loader.load('http://ads.test/root', () => currentTime);
+      currentTime = 10;
+
+      const [ad] = await loading;
+      expect(ad.startTime).toBe(10);
+      expect(ad.pre).toBe(false);
+    });
+
+    it('inherits tracking and resolves URLs against each response',
+        async () => {
+          const overlay = [
+            '<Creative><NonLinearAds><NonLinear width="300" height="50">',
+            '<IFrameResource>overlay.html</IFrameResource>',
+            '<NonLinearClickThrough>landing.html</NonLinearClickThrough>',
+            '<NonLinearClickTracking>overlay-click</NonLinearClickTracking>',
+            '</NonLinear></NonLinearAds></Creative>',
+          ].join('');
+          const outerTracking = [
+            '<Impression>impression</Impression><Error>error</Error>',
+            '<Creatives><Creative><Linear><TrackingEvents>',
+            '<Tracking event="start">start</Tracking>',
+            '<Tracking event="progress" offset="00:00:02">two</Tracking>',
+            '</TrackingEvents><VideoClicks>',
+            '<ClickThrough>https://outer.example/</ClickThrough>',
+            '<ClickTracking>click</ClickTracking>',
+            '</VideoClicks></Linear></Creative><Creative><NonLinearAds>',
+            '<TrackingEvents><Tracking event="start">overlay-start</Tracking>',
+            '</TrackingEvents><NonLinear>',
+            '<NonLinearClickTracking>overlay-click</NonLinearClickTracking>',
+            '</NonLinear></NonLinearAds></Creative></Creatives>',
+          ].join('');
+          const innerTracking = [
+            '<Impression>impression</Impression><Error>error</Error>',
+            '<Creatives><Creative><Linear><TrackingEvents>',
+            '<Tracking event="progress" offset="50%">half</Tracking>',
+            '<Tracking event="progress" offset="101%">invalid</Tracking>',
+            '</TrackingEvents><VideoClicks>',
+            '<ClickThrough>https://inner.example/</ClickThrough>',
+            '<ClickTracking>click</ClickTracking>',
+            '</VideoClicks></Linear></Creative><Creative><NonLinearAds>',
+            '<NonLinear>',
+            '<NonLinearClickTracking>overlay-click</NonLinearClickTracking>',
+            '</NonLinear>',
+            '</NonLinearAds></Creative></Creatives>',
+          ].join('');
+          documents.set('http://ads.test/root', {
+            uri: 'http://ads.test/outer/root.xml',
+            xml: document(wrapper('wrapper.xml', '', outerTracking)),
+          });
+          documents.set('http://ads.test/outer/wrapper.xml', {
+            uri: 'http://ads.test/inner/wrapper.xml',
+            xml: document(wrapper('../inline/ad.xml', '', innerTracking)),
+          });
+          documents.set('http://ads.test/inline/ad.xml', {
+            xml: linearVast.replace('</Creatives>', overlay + '</Creatives>'),
+          });
+
+          const [video, image] = await loader.load('http://ads.test/root',
+              () => 25);
+          expect(video.startTime).toBe(25);
+          expect(video.uri).toBe('http://ads.test/inline/test.mp4');
+          expect(video.clickThroughUrl).toBe('http://ads.test/inline/foo.bar');
+          expect(video.tracking.impression).toEqual([
+            'http://ads.test/outer/impression', 'http://ads.test/inner/impression',
+            'http://ads.test/inline/impression_url',
+            'http://ads.test/inline/impression_url2',
+          ]);
+          expect(video.tracking.error).toEqual([
+            'http://ads.test/outer/error', 'http://ads.test/inner/error',
+            'http://ads.test/inline/error_url',
+            'http://ads.test/inline/error_url2',
+          ]);
+          expect(video.tracking.start).toEqual([
+            'http://ads.test/outer/start', 'http://ads.test/inline/start_url',
+            'http://ads.test/inline/start_url2',
+          ]);
+          expect(video.tracking.clickTracking).toEqual([
+            'http://ads.test/outer/click', 'http://ads.test/inner/click',
+            'http://ads.test/inline/click_tracking',
+          ]);
+          expect(image.uri).toBe('http://ads.test/inline/overlay.html');
+          expect(image.clickThroughUrl).toBe(
+              'http://ads.test/inline/landing.html');
+          expect(image.tracking.impression).toEqual(video.tracking.impression);
+          expect(image.tracking.start).toEqual([
+            'http://ads.test/outer/overlay-start',
+          ]);
+          expect(image.tracking.clickTracking).toEqual([
+            'http://ads.test/outer/overlay-click',
+            'http://ads.test/inner/overlay-click',
+            'http://ads.test/inline/overlay-click',
+          ]);
+          expect(beacons).toEqual([]);
+
+          const events = shaka.ads.InterstitialTracker.fromTracking(
+              video.tracking);
+          const tracker = new shaka.ads.InterstitialTracker(() => events,
+              (url) => { beacons.push(url); });
+          tracker.onProgress(0, 3);
+          tracker.onProgress(3, 4, 10);
+          tracker.onProgress(4, 5, 10);
+          tracker.onProgress(0, 10, 10);
+          expect(beacons).toEqual([
+            'http://ads.test/outer/two', 'http://ads.test/inner/half',
+          ]);
+
+          documents.set('http://ads.test/inline/ad.xml', {
+            xml: linearVast.replace('foo.bar', ''),
+          });
+          const [withoutClickThrough] = await loader.load(
+              'http://ads.test/root', () => 25);
+          expect(withoutClickThrough.clickThroughUrl).toBe(
+              'https://inner.example/');
+        });
+
+    it('loads VMAP breaks through wrappers in document order', async () => {
+      const adBreak = (time, uri, attributes = '') =>
+        `<vmap:AdBreak timeOffset="${time}"><vmap:AdSource ${attributes}>` +
+        `<vmap:AdTagURI>${uri}</vmap:AdTagURI>` +
+        '</vmap:AdSource></vmap:AdBreak>';
+      documents.set('http://ads.test/vmap', {
+        uri: 'http://ads.test/dir/vmap.xml',
+        xml: '<vmap:VMAP xmlns:vmap="http://www.iab.net/videosuite/vmap">' +
+          adBreak('00:00:15', 'wrapper.xml') + adBreak('end', 'inline.xml') +
+          adBreak('start', 'wrapper.xml', 'followRedirects="false"') +
+          '</vmap:VMAP>',
+      });
+      documents.set('http://ads.test/dir/wrapper.xml', {
+        xml: document(wrapper('inline.xml')),
+      });
+      documents.set('http://ads.test/dir/inline.xml', {xml: document(inline('ad'))});
+      let readTime = false;
+      const ads = await loader.load('http://ads.test/vmap', () => {
+        readTime = true;
+        return null;
+      });
+
+      expect(ads.map((ad) => ad.startTime)).toEqual([15, Infinity]);
+      expect(ads.map((ad) => ad.id)).toEqual(['ad', 'ad']);
+      expect(readTime).toBe(false);
+    });
+
+    it('honors followAdditionalWrappers and the default single-ad limit',
+        async () => {
+          documents.set('http://ads.test/root', {xml: document(wrapper('next',
+              'followAdditionalWrappers="false"'))});
+          documents.set('http://ads.test/next', {xml: document(wrapper('forbidden'),
+              inline('pod', 'sequence="1"'), inline('first'),
+              inline('second'))});
+
+          const ads = await loader.load('http://ads.test/root', () => null);
+          expect(ads.map((ad) => ad.id)).toEqual(['first']);
+          expect(requests).toEqual(['http://ads.test/root', 'http://ads.test/next']);
+        });
+
+    it('orders pods and uses a stand-alone ad for an empty wrapper',
+        async () => {
+          documents.set('http://ads.test/root', {xml: document(wrapper('next',
+              'allowMultipleAds="true"'))});
+          documents.set('http://ads.test/next', {xml: document(
+              inline('last', 'sequence="3"'),
+              wrapper('empty', 'fallbackOnNoAd="true"', '', 'sequence="2"'),
+              inline('fallback'), inline('first', 'sequence="1"'))});
+          documents.set('http://ads.test/empty', {xml: document()});
+
+          const ads = await loader.load('http://ads.test/root', () => null);
+          expect(ads.map((ad) => ad.id)).toEqual(['first', 'fallback', 'last']);
+        });
+
+    for (const [xml, code] of [
+      [null, 301], ['<notVast/>', 100],
+      ['<VAST><Error>empty?e=[ERRORCODE]</Error></VAST>', 303],
+    ]) {
+      it(`reports VAST error ${code} through the chain and continues`,
+          async () => {
+            const errorTag = '<Error>error?e=[ERRORCODE]</Error>';
+            documents.set('http://ads.test/root', {xml: document(
+                wrapper('next/ad', '', errorTag), inline('alternative'))});
+            documents.set('http://ads.test/next/ad', {
+              xml: document(wrapper('final', '', errorTag)),
+            });
+            if (xml) {
+              documents.set('http://ads.test/next/final', {xml});
+            }
+
+            const ads = await loader.load('http://ads.test/root', () => null);
+            expect(ads.map((ad) => ad.id)).toEqual(['alternative']);
+            const errors = [`http://ads.test/error?e=${code}`,
+              `http://ads.test/next/error?e=${code}`];
+            if (code == 303) {
+              errors.push('http://ads.test/next/empty?e=303');
+            }
+            expect(beacons).toEqual(errors);
+          });
+    }
+
+    it('stops at five wrappers and reports redirect loops', async () => {
+      for (let i = 0; i <= 5; ++i) {
+        documents.set(`http://ads.test/step-${i}`, {
+          xml: document(wrapper(`step-${i + 1}`, '',
+              `<Error>error-${i}?e=[ERRORCODE]</Error>`)),
+        });
+      }
+      expect(await loader.load('http://ads.test/step-0', () => null)).toEqual([]);
+      expect(requests.length).toBe(6);
+      expect(beacons.length).toBe(6);
+      expect(beacons).toContain('http://ads.test/error-0?e=302');
+      expect(beacons).toContain('http://ads.test/error-5?e=302');
+
+      requests.length = 0;
+      beacons.length = 0;
+      documents.set('http://ads.test/step-1', {
+        uri: 'http://ads.test/step-0#redirect',
+        xml: document(wrapper('step-1')),
+      });
+      expect(await loader.load('http://ads.test/step-0', () => null)).toEqual([]);
+      expect(requests.length).toBe(2);
+      expect(beacons).toEqual(['http://ads.test/error-0?e=302']);
+    });
+  });
+
   describe('parseVastToInterstitials', () => {
     it('parses a linear ad as a pre-roll for a null time', async () => {
-      const interstitials = await VastInterstitialParser
+      const interstitials = await parser
           .parseVastToInterstitials(parseVast(linearVast), null);
 
       expect(interstitials.length).toBe(1);
@@ -114,7 +384,7 @@ describe('VastInterstitialParser', () => {
     });
 
     it('uses currentTime as the start time for a mid-roll', async () => {
-      const interstitials = await VastInterstitialParser
+      const interstitials = await parser
           .parseVastToInterstitials(parseVast(linearVast), 5);
 
       expect(interstitials.length).toBe(1);
@@ -124,7 +394,7 @@ describe('VastInterstitialParser', () => {
     });
 
     it('parses a linear ad as a post-roll for an infinite time', async () => {
-      const interstitials = await VastInterstitialParser
+      const interstitials = await parser
           .parseVastToInterstitials(parseVast(linearVast), Infinity);
 
       expect(interstitials.length).toBe(1);
@@ -172,7 +442,7 @@ describe('VastInterstitialParser', () => {
         '</VAST>',
       ].join('');
 
-      const interstitials = await VastInterstitialParser
+      const interstitials = await parser
           .parseVastToInterstitials(parseVast(vast), null);
 
       expect(interstitials.length).toBe(1);
@@ -242,7 +512,7 @@ describe('VastInterstitialParser', () => {
             '<NonLinear width="300" height="50">' + resources +
             '</NonLinear></NonLinearAds></Creative></Creatives></InLine>' +
             '</Ad></VAST>';
-        return VastInterstitialParser.parseVastToInterstitials(
+        return parser.parseVastToInterstitials(
             parseVast(vast), /* currentTime= */ 0);
       }
 
@@ -310,7 +580,7 @@ describe('VastInterstitialParser', () => {
         '</VAST>',
       ].join('');
 
-      const interstitials = await VastInterstitialParser
+      const interstitials = await parser
           .parseVastToInterstitials(parseVast(vast), null);
       expect(interstitials).toEqual([]);
     });
@@ -326,7 +596,7 @@ describe('VastInterstitialParser', () => {
         ' breakId="preroll">',
         '<vmap:AdSource id="preroll-ad-1" allowMultipleAds="false"',
         ' followRedirects="true">',
-        '<vmap:AdTagURI templateType="vast3"><![CDATA[test:/preroll]]>',
+        '<vmap:AdTagURI templateType="vast3"><![CDATA[http://ads.test/preroll]]>',
         '</vmap:AdTagURI>',
         '</vmap:AdSource>',
         '</vmap:AdBreak>',
@@ -334,7 +604,7 @@ describe('VastInterstitialParser', () => {
         ' breakId="midroll-1">',
         '<vmap:AdSource id="midroll-1-ad-1" allowMultipleAds="false"',
         ' followRedirects="true">',
-        '<vmap:AdTagURI templateType="vast3"><![CDATA[test:/midroll]]>',
+        '<vmap:AdTagURI templateType="vast3"><![CDATA[http://ads.test/midroll]]>',
         '</vmap:AdTagURI>',
         '</vmap:AdSource>',
         '</vmap:AdBreak>',
@@ -342,7 +612,7 @@ describe('VastInterstitialParser', () => {
         ' breakId="postroll">',
         '<vmap:AdSource id="postroll-ad-1" allowMultipleAds="false"',
         ' followRedirects="true">',
-        '<vmap:AdTagURI templateType="vast3"><![CDATA[test:/postroll]]>',
+        '<vmap:AdTagURI templateType="vast3"><![CDATA[http://ads.test/postroll]]>',
         '</vmap:AdTagURI>',
         '</vmap:AdSource>',
         '</vmap:AdBreak>',
@@ -351,11 +621,20 @@ describe('VastInterstitialParser', () => {
 
       const node = TXml.parseXmlString(vmap, 'vmap:VMAP');
       goog.asserts.assert(node, 'Should have a VMAP node!');
-      const ads = VastInterstitialParser.parseVMAP(node);
+      const ads = parser.parseVMAP(node);
       expect(ads).toEqual([
-        {time: null, uri: 'test:/preroll'},
-        {time: 15, uri: 'test:/midroll'},
-        {time: Infinity, uri: 'test:/postroll'},
+        {
+          time: null, uri: 'http://ads.test/preroll',
+          allowMultipleAds: false, followWrappers: true,
+        },
+        {
+          time: 15, uri: 'http://ads.test/midroll',
+          allowMultipleAds: false, followWrappers: true,
+        },
+        {
+          time: Infinity, uri: 'http://ads.test/postroll',
+          allowMultipleAds: false, followWrappers: true,
+        },
       ]);
     });
 
@@ -366,7 +645,7 @@ describe('VastInterstitialParser', () => {
         ' version="1.0">',
         '<vmap:AdBreak breakType="linear" breakId="no-offset">',
         '<vmap:AdSource>',
-        '<vmap:AdTagURI templateType="vast3"><![CDATA[test:/vast]]>',
+        '<vmap:AdTagURI templateType="vast3"><![CDATA[http://ads.test/vast]]>',
         '</vmap:AdTagURI>',
         '</vmap:AdSource>',
         '</vmap:AdBreak>',
@@ -377,7 +656,7 @@ describe('VastInterstitialParser', () => {
 
       const node = TXml.parseXmlString(vmap, 'vmap:VMAP');
       goog.asserts.assert(node, 'Should have a VMAP node!');
-      expect(VastInterstitialParser.parseVMAP(node)).toEqual([]);
+      expect(parser.parseVMAP(node)).toEqual([]);
     });
   });
 });
